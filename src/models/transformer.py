@@ -1,3 +1,5 @@
+from functools import partial
+
 import torch
 import torch.nn as nn
 from einops import einsum, rearrange
@@ -5,40 +7,44 @@ from jaxtyping import Float
 from typeguard import typechecked
 
 
-@typechecked
-def scaled_dot_product_attention(
-    q: Float[torch.Tensor, "b l2 h d"],
-    k: Float[torch.Tensor, "b l1 h d"],
-    v: Float[torch.Tensor, "b l1 h d"],
-    is_causal: bool = False,
-) -> Float[torch.Tensor, "b l2 h d"]:
-    d_model, len_q, len_k = q.size(-1), q.size(-3), k.size(-3)
-    scale = 1.0 / (d_model**0.5)
-    attn_weights = einsum(q, k, "b l1 h d, b l2 h d -> b h l1 l2") * scale
+class DotProductAttention(nn.Module):
+    def __init__(self, is_causal: bool = False, dropout: float = 0.1):
+        super().__init__()
+        self.dropout = dropout
+        self.is_causal = is_causal
 
-    attn_bias = torch.zeros(1, 1, len_q, len_k, dtype=q.dtype)
-    if is_causal:
-        attn_bias_msk = torch.ones(1, 1, len_q, len_k, dtype=torch.bool).tril(
-            diagonal=0
-        )
-        attn_bias.masked_fill_(attn_bias_msk.logical_not(), float("-inf"))
-        attn_bias.to(q.dtype)
+        self.attn_dropout = nn.Dropout(dropout)
 
-    print(attn_weights.shape)
-    print(attn_bias.shape)
+    @typechecked
+    def forward(
+        self,
+        q: Float[torch.Tensor, "b l2 h e"],
+        k: Float[torch.Tensor, "b l1 h e"],
+        v: Float[torch.Tensor, "b l1 h e"],
+    ) -> Float[torch.Tensor, "b l2 h e"]:
+        d_model, len_q, len_k = q.size(-1), q.size(-3), k.size(-3)
+        scale = 1.0 / (d_model**0.5)
+        attn_weights = einsum(q, k, "b l2 h e, b l1 h e -> b h l2 l1") * scale
 
-    attn_weights += attn_bias
-    attn_weights = attn_weights.softmax(dim=-1)
-    # attn_weights = attn_weights.dropout(p=0.1)
-    attn = einsum(attn_weights, v, "b h l1 l2, b l1 h d -> b l2 h d")
-    print(attn.shape)
-    return attn
+        attn_bias = torch.zeros(1, 1, len_q, len_k, dtype=q.dtype)
+        if self.is_causal:
+            attn_bias_msk = torch.ones(1, 1, len_q, len_k, dtype=torch.bool).tril(
+                diagonal=0
+            )
+            attn_bias.masked_fill_(attn_bias_msk.logical_not(), float("-inf"))
+            attn_bias.to(q.dtype)
+
+        attn_weights += attn_bias
+        attn_weights = attn_weights.softmax(dim=-1)
+        attn_weights = self.attn_dropout(attn_weights)
+        attn = einsum(attn_weights, v, "b h l2 l1, b l1 h e -> b l2 h e")
+        return attn
 
 
 @typechecked
 def split_heads(
     x: Float[torch.Tensor, "b l d"], n_heads: int
-) -> Float[torch.Tensor, "b l h d"]:
+) -> Float[torch.Tensor, "b l h e"]:
     b, l, d = x.size()
     assert d % n_heads == 0, f"{d =} must be divisible by {n_heads =}"
     head_dim = d // n_heads
@@ -55,11 +61,15 @@ def merge_heads(
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, d_model: int, n_heads: int):
+    def __init__(
+        self, d_model: int, n_heads: int, is_causal: bool = False, dropout: float = 0.1
+    ):
         super().__init__()
 
         self.d_model = d_model
         self.n_heads = n_heads
+        self.is_causal = is_causal
+        self.dropout = dropout
 
         self.head_dim = d_model // n_heads
         assert (
@@ -68,13 +78,18 @@ class SelfAttention(nn.Module):
 
         self.qkv_proj = nn.Linear(d_model, 3 * d_model)
 
+        self.attention = DotProductAttention(is_causal=False, dropout=dropout)
+
+        self.out_proj = nn.Linear(d_model, d_model)
+        self.out_dropout = nn.Dropout(dropout)
+
     @typechecked
-    def __call__(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
+    def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
 
         q, k, v = self.qkv_proj(x).chunk(3, dim=-1)
-        q_h, k_h, v_h = map(lambda x: split_heads(x, self.n_heads), (q, k, v))
+        q_h, k_h, v_h = map(partial(split_heads, n_heads=self.n_heads), (q, k, v))
 
-        out_h = scaled_dot_product_attention(q_h, k_h, v_h, is_causal=False)
-        return merge_heads(out_h, self.n_heads)
-
-        # out = attention(q, k, v, mask=mask)
+        out_h = self.attention(q_h, k_h, v_h)
+        out = merge_heads(out_h, self.n_heads)
+        out = self.out_proj(out)
+        return self.out_dropout(out)
