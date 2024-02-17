@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "llm"
+version = "0.1.0"
+description = "LLM for educational purpose"
+authors = ["Thibault Douzon <douzont@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+numpy = "^1.26.4"
+transformers = "^4.37.2"
+torch = "^2.2.0"
+black = "^24.2.0"
+ruff = "^0.2.1"
+isort = "^5.13.2"
+ipython = "^8.21.0"
+jaxtyping = "^0.2.25"
+typeguard = "2.13.3"
+einops = "^0.7.0"
+loguru = "^0.7.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
