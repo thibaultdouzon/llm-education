@@ -54,11 +54,11 @@ class DotProductAttention(nn.Module):
         scale = 1.0 / (d_model**0.5)
         attn_weights = einsum(q, k, "b l2 h e, b l1 h e -> b h l2 l1") * scale
 
-        attn_bias = torch.zeros(1, 1, len_q, len_k, dtype=q.dtype)
+        attn_bias = torch.zeros(1, 1, len_q, len_k, dtype=q.dtype, device=q.device)
         if self.is_causal:
-            attn_bias_msk = torch.ones(1, 1, len_q, len_k, dtype=torch.bool).tril(
-                diagonal=0
-            )
+            attn_bias_msk = torch.ones(
+                1, 1, len_q, len_k, dtype=torch.bool, device=q.device
+            ).tril(diagonal=0)
             attn_bias.masked_fill_(attn_bias_msk.logical_not(), float("-inf"))
             attn_bias.to(q.dtype)
 
@@ -197,6 +197,18 @@ class Transformer(nn.Module):
                 for _ in range(n_layers)
             ]
         )
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module: nn.Module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.xavier_normal_(module.weight)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.xavier_normal_(module.weight)
+        elif isinstance(module, (nn.LayerNorm,)):
+            torch.nn.init.zeros_(module.bias)
+            torch.nn.init.ones_(module.weight)
 
     @typechecked
     def forward(self, x: Int[torch.Tensor, "b l"]) -> Float[torch.Tensor, "b l d"]:
