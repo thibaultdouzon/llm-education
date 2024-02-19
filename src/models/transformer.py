@@ -7,6 +7,34 @@ from jaxtyping import Float
 from typeguard import typechecked
 
 
+class SinCosPositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, max_len: int = 512):
+        super().__init__()
+        self.d_model = d_model
+        self.max_len = max_len
+
+        self.pe = nn.Parameter(torch.zeros(1, max_len, d_model), requires_grad=False)
+
+    def init_weights(self):
+        pos = torch.arange(self.max_len, dtype=self.pe.dtype)
+        pos = pos.unsqueeze(-1) / (
+            10000 ** (torch.arange(0, self.d_model, 2) / self.d_model)
+        )
+        print(torch.sin(pos[:10]))
+        self.pe.data = rearrange(
+            [torch.sin(pos), torch.cos(pos)],
+            "a l d2 -> 1 l (d2 a)",
+            a=2,
+            l=self.max_len,
+            d2=self.d_model // 2,
+        )
+
+    @typechecked
+    def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
+        x = x + self.pe[:, : x.size(1)]
+        return x
+
+
 class DotProductAttention(nn.Module):
     def __init__(self, is_causal: bool = False, dropout: float = 0.1):
         super().__init__()
@@ -93,3 +121,85 @@ class SelfAttention(nn.Module):
         out = merge_heads(out_h, self.n_heads)
         out = self.out_proj(out)
         return self.out_dropout(out)
+
+
+class FeedForward(nn.Module):
+    def __init__(self, d_model: int, d_ff: int, dropout: float = 0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.d_ff = d_ff
+        self.dropout = dropout
+
+        self.m_ff_proj = (nn.Linear(d_model, d_ff),)
+        self.act = (nn.GELU(),)
+        self.ff_m_proj = (nn.Linear(d_ff, d_model),)
+        self.ff_dropout = (nn.Dropout(dropout),)
+
+    @typechecked
+    def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
+        x = self.m_ff_proj(x)
+        x = self.act(x)
+        x = self.ff_m_proj(x)
+        return self.ff_dropout(x)
+
+
+class Block(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        d_ff: int,
+        n_heads: int,
+        is_causal: bool = False,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.d_model = d_model
+        self.d_ff = d_ff
+        self.n_heads = n_heads
+        self.is_causal = is_causal
+        self.dropout = dropout
+
+        self.attn = SelfAttention(d_model, n_heads, is_causal, dropout)
+        self.norm_attn = nn.LayerNorm(d_model)
+        self.ffn = FeedForward(d_model, d_ff, dropout)
+        self.norm_ffn = nn.LayerNorm(d_model)
+
+    @typechecked
+    def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
+        x += self.attn(self.norm_attn(x))
+        return x + self.ffn(self.norm_ffn(x))
+
+
+class Transformer(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        d_vocab: int,
+        d_ff: int,
+        n_heads: int,
+        n_layers: int,
+        is_causal: bool = False,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.d_model = d_model
+        self.d_ff = d_ff
+        self.n_heads = n_heads
+        self.n_layers = n_layers
+        self.dropout = dropout
+
+        self.embedding = nn.Embedding(d_vocab, d_model)
+        self.positional_encoding = ...
+
+        self.layers = nn.ModuleList(
+            [
+                Block(d_model, d_ff, n_heads, is_causal=is_causal, dropout=dropout)
+                for _ in range(n_layers)
+            ]
+        )
+
+    @typechecked
+    def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
+        for layer in self.layers:
+            x = layer(x)
+        return x
