@@ -3,7 +3,7 @@ from functools import partial
 import torch
 import torch.nn as nn
 from einops import einsum, rearrange
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from typeguard import typechecked
 
 
@@ -130,10 +130,10 @@ class FeedForward(nn.Module):
         self.d_ff = d_ff
         self.dropout = dropout
 
-        self.m_ff_proj = (nn.Linear(d_model, d_ff),)
-        self.act = (nn.GELU(),)
-        self.ff_m_proj = (nn.Linear(d_ff, d_model),)
-        self.ff_dropout = (nn.Dropout(dropout),)
+        self.m_ff_proj = nn.Linear(d_model, d_ff)
+        self.act = nn.GELU()
+        self.ff_m_proj = nn.Linear(d_ff, d_model)
+        self.ff_dropout = nn.Dropout(dropout)
 
     @typechecked
     def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
@@ -189,7 +189,7 @@ class Transformer(nn.Module):
         self.dropout = dropout
 
         self.embedding = nn.Embedding(d_vocab, d_model)
-        self.positional_encoding = ...
+        self.positional_encoding = nn.Embedding(d_vocab, d_model)
 
         self.layers = nn.ModuleList(
             [
@@ -199,7 +199,8 @@ class Transformer(nn.Module):
         )
 
     @typechecked
-    def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
+    def forward(self, x: Int[torch.Tensor, "b l"]) -> Float[torch.Tensor, "b l d"]:
+        x = self.embedding(x) + self.positional_encoding(x)
         for layer in self.layers:
             x = layer(x)
         return x
