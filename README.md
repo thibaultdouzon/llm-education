@@ -11,8 +11,10 @@ Small lib implementing LLMs for educational purposes
 - [ ] Basic fine tuning
 - [ ] Better Transformer++ (from mamba)
 - [ ] KV cache for inference
+- [ ] Accelerate inference with smaller predictor
 - [ ] Generation with sampling, beam search 
 - [ ] Generation guided by grammar
 - [ ] SSM / Mamba architecture
 - [ ] Visual Transformers
+- [ ] Efficient models
 - [ ] Triton?

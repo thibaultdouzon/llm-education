@@ -6,7 +6,7 @@ import torch.nn as nn
 from einops import einsum, rearrange
 from jaxtyping import Float, Int
 from loguru import logger
-from transformers import AutoConfig, AutoModel
+from transformers import AutoConfig, AutoModelForCausalLM
 from typeguard import typechecked
 
 
@@ -22,7 +22,9 @@ class Config:
     dropout: float
 
     def __post_init__(self):
-        assert self.d_model % self.n_heads == 0, f"{self.d_model =} must be divisible by {self.n_heads = }"
+        assert (
+            self.d_model % self.n_heads == 0
+        ), f"{self.d_model =} must be divisible by {self.n_heads = }"
 
 
 class SinCosPositionalEncoding(nn.Module):
@@ -37,7 +39,9 @@ class SinCosPositionalEncoding(nn.Module):
 
     def init_weights(self):
         pos = torch.arange(self.config.max_len, dtype=self.pe.dtype)
-        pos = pos.unsqueeze(-1) / (10000 ** (torch.arange(0, self.config.d_model, 2) / self.config.d_model))
+        pos = pos.unsqueeze(-1) / (
+            10000 ** (torch.arange(0, self.config.d_model, 2) / self.config.d_model)
+        )
         self.pe.data = rearrange(
             [torch.sin(pos), torch.cos(pos)],
             "a l d2 -> 1 l (d2 a)",
@@ -72,7 +76,9 @@ class DotProductAttention(nn.Module):
 
         attn_bias = torch.zeros(1, 1, len_q, len_k, dtype=q.dtype, device=q.device)
         if self.config.is_causal:
-            attn_bias_msk = torch.ones(1, 1, len_q, len_k, dtype=torch.bool, device=q.device).tril(diagonal=0)
+            attn_bias_msk = torch.ones(
+                1, 1, len_q, len_k, dtype=torch.bool, device=q.device
+            ).tril(diagonal=0)
             attn_bias.masked_fill_(attn_bias_msk.logical_not(), float("-inf"))
             attn_bias.to(q.dtype)
 
@@ -84,7 +90,9 @@ class DotProductAttention(nn.Module):
 
 
 @typechecked
-def split_heads(x: Float[torch.Tensor, "b l d"], n_heads: int) -> Float[torch.Tensor, "b l h e"]:
+def split_heads(
+    x: Float[torch.Tensor, "b l d"], n_heads: int
+) -> Float[torch.Tensor, "b l h e"]:
     b, l, d = x.size()
     assert d % n_heads == 0, f"{d = } must be divisible by {n_heads = }"
     head_dim = d // n_heads
@@ -92,7 +100,9 @@ def split_heads(x: Float[torch.Tensor, "b l d"], n_heads: int) -> Float[torch.Te
 
 
 @typechecked
-def merge_heads(x: Float[torch.Tensor, "b l h e"], n_heads: int) -> Float[torch.Tensor, "b l d"]:
+def merge_heads(
+    x: Float[torch.Tensor, "b l h e"], n_heads: int
+) -> Float[torch.Tensor, "b l d"]:
     b, l, h, d = x.size()
     assert h == n_heads, f"{h =} must be equal to {n_heads =}"
     return rearrange(x, "b l h e -> b l (h e)")
@@ -176,6 +186,9 @@ class Transformer(nn.Module):
         self.positional_encoding = nn.Embedding(config.max_size, config.d_model)
 
         self.layers = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
+        self.norm_transformer = nn.LayerNorm(config.d_model)
+        self.lm_head = nn.Linear(config.d_model, config.d_vocab, bias=False)
+
         self.apply(self._init_weights)
 
     def _init_weights(self, module: nn.Module):
@@ -191,10 +204,13 @@ class Transformer(nn.Module):
 
     @typechecked
     def forward(self, x: Int[torch.Tensor, "b l"]) -> Float[torch.Tensor, "b l d"]:
-        x = self.embedding(x) + self.positional_encoding(x)
+        x = self.embedding(x) + self.positional_encoding(
+            torch.arange(x.size(1), device=x.device, dtype=torch.int64)
+        )
         for layer in self.layers:
             x = layer(x)
-        return x
+        x = self.norm_transformer(x)
+        return self.lm_head(x)
 
     @classmethod
     def from_pretrained(
@@ -215,15 +231,41 @@ class Transformer(nn.Module):
             dropout=config_hf.attn_pdrop,
         )
 
-        model_hf = AutoModel.from_pretrained(model_name)
+        gpt2_layer_translation = {
+            "transformer.": "",
+            "wte": "embedding",
+            "wpe": "positional_encoding",
+            "h.": "layers.",
+            "ln_1": "norm_attn",
+            "ln_2": "norm_ffn",
+            "attn.c_attn": "attn.qkv_proj",
+            "attn.c_proj": "attn.out_proj",
+            "mlp.c_fc": "ffn.m_ff_proj",
+            "mlp.c_proj": "ffn.ff_m_proj",
+            "ln_f": "norm_transformer",
+        }
+
+        model_hf = AutoModelForCausalLM.from_pretrained(model_name)
         logger.info(config_hf)
         sd_hf = model_hf.state_dict()
-        for k, v in sd_hf.items():
-            logger.info(f"{k = } {v.shape = }")
 
         model = cls(config)
         sd = model.state_dict()
-        for k, v in sd.items():
-            logger.info(f"{k = } {v.shape = }")
+
+        copied_layers = set()
+        for k_hf, v_hf in sd_hf.items():
+            k = k_hf
+            for tr_hf, tr in gpt2_layer_translation.items():
+                if tr_hf in k:
+                    k = k.replace(tr_hf, tr)
+            logger.info(f"{k_hf = } -> {k = }")
+            assert k in sd, f"{k = } not in {sd.keys()}"
+
+            if sd[k].shape != v_hf.shape:
+                v_hf.transpose_(0, 1)
+            with torch.no_grad():
+                sd[k].copy_(v_hf)
+            copied_layers.add(k)
+        logger.info(f"{set(sd.keys()) - copied_layers = }")
 
         return model
