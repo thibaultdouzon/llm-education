@@ -22,9 +22,7 @@ class Config:
     dropout: float
 
     def __post_init__(self):
-        assert (
-            self.d_model % self.n_heads == 0
-        ), f"{self.d_model =} must be divisible by {self.n_heads = }"
+        assert self.d_model % self.n_heads == 0, f"{self.d_model =} must be divisible by {self.n_heads = }"
 
 
 class SinCosPositionalEncoding(nn.Module):
@@ -33,15 +31,13 @@ class SinCosPositionalEncoding(nn.Module):
         self.config = config
 
         self.pe = nn.Parameter(
-            torch.zeros(1, config.max_len, config.d_model), requires_grad=False
+            torch.zeros(1, config.max_len, config.d_model),
+            requires_grad=False,
         )
 
     def init_weights(self):
         pos = torch.arange(self.config.max_len, dtype=self.pe.dtype)
-        pos = pos.unsqueeze(-1) / (
-            10000 ** (torch.arange(0, self.config.d_model, 2) / self.config.d_model)
-        )
-        print(torch.sin(pos[:10]))
+        pos = pos.unsqueeze(-1) / (10000 ** (torch.arange(0, self.config.d_model, 2) / self.config.d_model))
         self.pe.data = rearrange(
             [torch.sin(pos), torch.cos(pos)],
             "a l d2 -> 1 l (d2 a)",
@@ -76,9 +72,7 @@ class DotProductAttention(nn.Module):
 
         attn_bias = torch.zeros(1, 1, len_q, len_k, dtype=q.dtype, device=q.device)
         if self.config.is_causal:
-            attn_bias_msk = torch.ones(
-                1, 1, len_q, len_k, dtype=torch.bool, device=q.device
-            ).tril(diagonal=0)
+            attn_bias_msk = torch.ones(1, 1, len_q, len_k, dtype=torch.bool, device=q.device).tril(diagonal=0)
             attn_bias.masked_fill_(attn_bias_msk.logical_not(), float("-inf"))
             attn_bias.to(q.dtype)
 
@@ -90,19 +84,15 @@ class DotProductAttention(nn.Module):
 
 
 @typechecked
-def split_heads(
-    x: Float[torch.Tensor, "b l d"], n_heads: int
-) -> Float[torch.Tensor, "b l h e"]:
+def split_heads(x: Float[torch.Tensor, "b l d"], n_heads: int) -> Float[torch.Tensor, "b l h e"]:
     b, l, d = x.size()
-    assert d % n_heads == 0, f"{d =} must be divisible by {n_heads =}"
+    assert d % n_heads == 0, f"{d = } must be divisible by {n_heads = }"
     head_dim = d // n_heads
     return rearrange(x, "b l (h e) -> b l h e", h=n_heads, e=head_dim)
 
 
 @typechecked
-def merge_heads(
-    x: Float[torch.Tensor, "b l h e"], n_heads: int
-) -> Float[torch.Tensor, "b l d"]:
+def merge_heads(x: Float[torch.Tensor, "b l h e"], n_heads: int) -> Float[torch.Tensor, "b l d"]:
     b, l, h, d = x.size()
     assert h == n_heads, f"{h =} must be equal to {n_heads =}"
     return rearrange(x, "b l h e -> b l (h e)")
@@ -131,7 +121,8 @@ class SelfAttention(nn.Module):
 
         q, k, v = self.qkv_proj(x).chunk(3, dim=-1)
         q_h, k_h, v_h = map(
-            partial(split_heads, n_heads=self.config.n_heads), (q, k, v)
+            partial(split_heads, n_heads=self.config.n_heads),
+            (q, k, v),
         )
 
         out_h = self.attention(q_h, k_h, v_h)
@@ -213,11 +204,11 @@ class Transformer(nn.Module):
 
         config_hf = AutoConfig.from_pretrained(model_name)
 
-        config = dict(
+        config = Config(
             d_model=config_hf.hidden_size,
             d_vocab=config_hf.vocab_size,
             max_size=config_hf.n_positions,
-            d_ff=config_hf.n_ctx,
+            d_ff=4 * config_hf.hidden_size,
             n_heads=config_hf.n_head,
             n_layers=config_hf.n_layer,
             is_causal=False,
@@ -230,6 +221,9 @@ class Transformer(nn.Module):
         for k, v in sd_hf.items():
             logger.info(f"{k = } {v.shape = }")
 
-        model = cls(**config)
+        model = cls(config)
+        sd = model.state_dict()
+        for k, v in sd.items():
+            logger.info(f"{k = } {v.shape = }")
 
         return model

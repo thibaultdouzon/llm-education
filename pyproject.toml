@@ -19,6 +19,15 @@ typeguard = "2.13.3"
 einops = "^0.7.0"
 loguru = "^0.7.2"
 
+[tool.black]
+line-length = 88
+
+[tool.ruff]
+line-length = 88
+
+ignore = [
+    "F722", # forward-annotation-syntax-error, because of Jaxtyping
+]
 
 [build-system]
 requires = ["poetry-core"]
