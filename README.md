@@ -5,7 +5,7 @@ Small lib implementing LLMs for educational purposes
 ## Objectives
 
 - [x] Implement Transformer architecture
-- [ ] Load models from Huggingface and reproduce results
+- [x] Load models from Huggingface and reproduce results
 - [ ] Tokenizers
 - [ ] Dataset (Shakespeare?)
 - [ ] Basic fine tuning
