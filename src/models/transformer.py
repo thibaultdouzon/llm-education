@@ -214,6 +214,16 @@ class Transformer(nn.Module):
         x = self.norm_transformer(x)
         return self.lm_head(x)
 
+    @typechecked
+    def generate(
+        self, x: Int[torch.Tensor, "b l"], n_tokens: int = 100
+    ) -> Int[torch.Tensor, "b ll"]:
+        for i in range(n_tokens):
+            pred = self(x)[:, -1].argmax(dim=-1)
+            x = torch.cat([x, pred.unsqueeze(-1)], dim=1)
+
+        return x
+
     @classmethod
     def from_pretrained(
         cls,
