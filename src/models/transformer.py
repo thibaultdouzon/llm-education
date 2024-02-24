@@ -5,8 +5,7 @@ import torch
 import torch.nn as nn
 from einops import einsum, rearrange
 from jaxtyping import Float, Int
-from loguru import logger
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM, activations
 from typeguard import typechecked
 
 
@@ -147,7 +146,7 @@ class FeedForward(nn.Module):
         self.config = config
 
         self.m_ff_proj = nn.Linear(config.d_model, config.d_ff)
-        self.act = nn.GELU()
+        self.act = activations.NewGELUActivation()
         self.ff_m_proj = nn.Linear(config.d_ff, config.d_model)
         self.ff_dropout = nn.Dropout(config.dropout)
 
@@ -170,8 +169,10 @@ class Block(nn.Module):
 
     @typechecked
     def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
-        x += self.attn(self.norm_attn(x))
-        return x + self.ffn(self.norm_ffn(x))
+        x = self.attn(self.norm_attn(x)) + x
+
+        x = self.ffn(self.norm_ffn(x)) + x
+        return x
 
 
 class Transformer(nn.Module):
@@ -205,10 +206,11 @@ class Transformer(nn.Module):
     @typechecked
     def forward(self, x: Int[torch.Tensor, "b l"]) -> Float[torch.Tensor, "b l d"]:
         x = self.embedding(x) + self.positional_encoding(
-            torch.arange(x.size(1), device=x.device, dtype=torch.int64)
+            torch.arange(x.size(1), device=x.device, dtype=torch.int64).unsqueeze(0)
         )
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
             x = layer(x)
+
         x = self.norm_transformer(x)
         return self.lm_head(x)
 
@@ -227,7 +229,7 @@ class Transformer(nn.Module):
             d_ff=4 * config_hf.hidden_size,
             n_heads=config_hf.n_head,
             n_layers=config_hf.n_layer,
-            is_causal=False,
+            is_causal=True,
             dropout=config_hf.attn_pdrop,
         )
 
@@ -246,26 +248,30 @@ class Transformer(nn.Module):
         }
 
         model_hf = AutoModelForCausalLM.from_pretrained(model_name)
-        logger.info(config_hf)
         sd_hf = model_hf.state_dict()
 
         model = cls(config)
         sd = model.state_dict()
 
+        transposed = [
+            "attn.c_attn.weight",
+            "attn.c_proj.weight",
+            "mlp.c_fc.weight",
+            "mlp.c_proj.weight",
+        ]
         copied_layers = set()
         for k_hf, v_hf in sd_hf.items():
             k = k_hf
             for tr_hf, tr in gpt2_layer_translation.items():
                 if tr_hf in k:
                     k = k.replace(tr_hf, tr)
-            logger.info(f"{k_hf = } -> {k = }")
+            if any(t in k_hf for t in transposed):
+                v_hf = v_hf.transpose(0, 1)
             assert k in sd, f"{k = } not in {sd.keys()}"
+            assert sd[k].shape == v_hf.shape, f"{sd[k].shape = } != {v_hf.shape = }"
 
-            if sd[k].shape != v_hf.shape:
-                v_hf.transpose_(0, 1)
             with torch.no_grad():
                 sd[k].copy_(v_hf)
             copied_layers.add(k)
-        logger.info(f"{set(sd.keys()) - copied_layers = }")
 
-        return model
+        return model.eval()
