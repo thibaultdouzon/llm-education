@@ -32,12 +32,12 @@ class SinCosPositionalEncoding(nn.Module):
         self.config = config
 
         self.pe = nn.Parameter(
-            torch.zeros(1, config.max_len, config.d_model),
+            torch.zeros(1, config.max_size, config.d_model),
             requires_grad=False,
         )
 
     def init_weights(self):
-        pos = torch.arange(self.config.max_len, dtype=self.pe.dtype)
+        pos = torch.arange(self.config.max_size, dtype=self.pe.dtype)
         pos = pos.unsqueeze(-1) / (
             10000 ** (torch.arange(0, self.config.d_model, 2) / self.config.d_model)
         )
@@ -45,7 +45,7 @@ class SinCosPositionalEncoding(nn.Module):
             [torch.sin(pos), torch.cos(pos)],
             "a l d2 -> 1 l (d2 a)",
             a=2,
-            l=self.config.max_len,
+            l=self.config.max_size,
             d2=self.config.d_model // 2,
         )
 
@@ -127,7 +127,6 @@ class SelfAttention(nn.Module):
 
     @typechecked
     def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
-
         q, k, v = self.qkv_proj(x).chunk(3, dim=-1)
         q_h, k_h, v_h = map(
             partial(split_heads, n_heads=self.config.n_heads),
@@ -229,7 +228,6 @@ class Transformer(nn.Module):
         cls,
         model_name: str,
     ):
-
         config_hf = AutoConfig.from_pretrained(model_name)
 
         config = Config(
