@@ -1,12 +1,20 @@
 from dataclasses import dataclass
+from enum import Enum
 from functools import partial
 
 import torch
+import torch.nn.functional as F
 import torch.nn as nn
 from einops import einsum, rearrange
 from jaxtyping import Float, Int
 from transformers import AutoConfig, AutoModelForCausalLM, activations
 from typeguard import typechecked
+
+
+class GenerationStrategies(Enum):
+    DETERMINIST = 0
+    SAMPLING = 1
+    BEAM_SEARCH = 2
 
 
 @dataclass
@@ -215,10 +223,23 @@ class Transformer(nn.Module):
 
     @typechecked
     def generate(
-        self, x: Int[torch.Tensor, "b l"], n_tokens: int = 100
+        self,
+        x: Int[torch.Tensor, "b l"],
+        n_tokens: int = 100,
+        strategy: GenerationStrategies = GenerationStrategies.DETERMINIST,
+        temperature: float = 0.0,
     ) -> Int[torch.Tensor, "b ll"]:
         for i in range(n_tokens):
-            pred = self(x)[:, -1].argmax(dim=-1)
+            logits = self(x)[:, -1]
+            match strategy:
+                case GenerationStrategies.DETERMINIST:
+                    pred = logits.argmax(dim=-1)
+                case GenerationStrategies.SAMPLING:
+                    sampling_weights = F.softmax(logits, dim=-1)
+                    pred = torch.multinomial(sampling_weights, num_samples=1)
+                case GenerationStrategies.BEAM_SEARCH:
+                    raise NotImplementedError()
+
             x = torch.cat([x, pred.unsqueeze(-1)], dim=1)
 
         return x
