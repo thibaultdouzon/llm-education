@@ -16,6 +16,10 @@ eps = 1e-6
 def softmax_temp(
     input: Float[torch.Tensor, "b l d"], dim: int = -1, temperature: float = 0
 ) -> Float[torch.Tensor, "b l d"]:
+    """
+    Compute the softmax with temperature applied.
+    Input values are normalized to avoid overflows due to exp.
+    """
     if temperature < eps:
         return input.argmax(dim=dim)
     maximum = torch.max(input / temperature)
