@@ -210,7 +210,7 @@ class Transformer(nn.Module):
         x = self.embedding(x) + self.positional_encoding(
             torch.arange(x.size(1), device=x.device, dtype=torch.int64).unsqueeze(0)
         )
-        for i, layer in enumerate(self.layers):
+        for layer in self.layers:
             x = layer(x)
 
         x = self.norm_transformer(x)
