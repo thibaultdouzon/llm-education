@@ -9,7 +9,11 @@ from jaxtyping import Float, Int
 from transformers import AutoConfig, AutoModelForCausalLM, activations
 from typeguard import typechecked
 
-from src.utils.sampling import GenerationStrategies, softmax_temp
+from src.utils.sampling import (
+    GenerationStrategies,
+    generate_beam_search,
+    generate_greedy,
+)
 
 
 @dataclass
@@ -221,27 +225,24 @@ class Transformer(nn.Module):
         self,
         x: Int[torch.Tensor, "b l"],
         n_tokens: int = 100,
+        n_beams: int = 1,
         strategy: GenerationStrategies = GenerationStrategies.DETERMINIST,
         temperature: float = 0.0,
     ) -> Int[torch.Tensor, "b ll"]:
-        for i in range(n_tokens):
-            logits = self(x)[:, -1]
-            match strategy:
-                case GenerationStrategies.DETERMINIST:
-                    pred = logits.argmax(dim=-1)
-                case GenerationStrategies.SAMPLING:
-                    sampling_weights = softmax_temp(
-                        logits, dim=-1, temperature=temperature
-                    )
-                    pred = torch.multinomial(sampling_weights, num_samples=1)
-                case GenerationStrategies.BEAM_SEARCH:
-                    raise NotImplementedError()
-                case _:
-                    raise NotImplementedError()
-
-            x = torch.cat([x, pred.unsqueeze(-1)], dim=1)
-
-        return x
+        match strategy:
+            case GenerationStrategies.DETERMINIST:
+                assert (
+                    temperature == 0.0
+                ), f"{strategy = } and {temperature = } are incompatible, temperature must be 0.0"
+                return generate_greedy(self, x, n_tokens, temperature=0.0)
+            case GenerationStrategies.SAMPLING:
+                return generate_greedy(self, x, n_tokens, temperature=temperature)
+            case GenerationStrategies.BEAM_SEARCH:
+                return generate_beam_search(
+                    self, x, n_tokens, n_beams, temperature=temperature
+                )
+            case _:
+                raise NotImplementedError()
 
     @classmethod
     def from_pretrained(
