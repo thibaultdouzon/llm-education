@@ -17,7 +17,9 @@ eps = 1e-6
 
 
 def softmax_temp(
-    x: Float[torch.Tensor, "b l d"], dim: int = -1, temperature: float = 0
+    x: Float[torch.Tensor, "b l d"],
+    dim: int = -1,
+    temperature: float = 0,
 ) -> Float[torch.Tensor, "b l d"]:
     """
     Compute the softmax with temperature applied.
@@ -37,7 +39,12 @@ def generate_beam_search(
     n_tokens: int = 100,
     n_beams: int = 3,
     temperature: float = 0.0,
-) -> Int[torch.Tensor, "b ll"]:
+    *,
+    return_log_scores: bool = False,
+) -> (
+    Int[torch.Tensor, "b ll"]
+    | tuple[Int[torch.Tensor, "b ll"], Float[torch.Tensor, "b"]]
+):
     """
     Beam search algorithm.
     Implementation notes: generated sequences might diverge, must keep track of all of them
@@ -91,7 +98,12 @@ def generate_greedy(
     x: Int[torch.Tensor, "b l"],
     n_tokens: int = 100,
     temperature: float = 0.0,
-) -> Int[torch.Tensor, "b ll"]:
+    *,
+    return_log_scores: bool = False,
+) -> (
+    Int[torch.Tensor, "b ll"]
+    | tuple[Int[torch.Tensor, "b ll"], Float[torch.Tensor, "b"]]
+):
     for i in range(n_tokens):
         logits = self(x)[:, -1]
         if temperature < eps:
