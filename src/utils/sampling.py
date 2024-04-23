@@ -32,6 +32,22 @@ def softmax_temp(
     return exps_norm / exps_norm.sum(dim=dim)
 
 
+def log_softmax_temp(
+    x: Float[torch.Tensor, "b l d"],
+    dim: int = -1,
+    temperature: float = 0,
+) -> Float[torch.Tensor, "b l d"]:
+    """
+    Compute the log softmax with temperature applied.
+    Use the logsumexp trick to avoid overflows (https://stackoverflow.com/questions/61567597/how-is-log-softmax-implemented-to-compute-its-value-and-gradient-with-better).
+    """
+    if temperature < eps:
+        return x.log_softmax(dim=dim)
+    maximum = torch.max(x / temperature)
+    log_sum_exp = torch.logsumexp(x / temperature - maximum, dim=dim)
+    return x / temperature - maximum - log_sum_exp
+
+
 @typechecked
 def generate_beam_search(
     model,
@@ -104,10 +120,13 @@ def generate_greedy(
     Int[torch.Tensor, "b ll"]
     | tuple[Int[torch.Tensor, "b ll"], Float[torch.Tensor, "b"]]
 ):
+    log_prob = 1.0
     for i in range(n_tokens):
         logits = self(x)[:, -1]
         if temperature < eps:
-            pred = logits.argmax(dim=-1)
+            log_prob_logits = logits.log_softmax(dim=-1)
+            pred = torch.argmax(log_prob_logits)
+            log_prob += log_prob_logits[pred]
         else:
             sampling_weights = softmax_temp(logits, dim=-1, temperature=temperature)
             pred = torch.multinomial(sampling_weights, num_samples=1)
