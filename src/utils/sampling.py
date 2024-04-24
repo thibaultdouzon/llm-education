@@ -69,13 +69,11 @@ def generate_beam_search(
     Implementation notes: generated sequences might diverge, must keep track of all of them
     assert batch_size is 1 for now.
     """
-    scores = torch.ones(1)
+    scores = torch.zeros(1)
     for _ in range(n_tokens):
-        logits = model(x)[:, -1].softmax(dim=-1)  # TODO use log softmax and sums
+        logits = log_softmax_temp(model(x)[:, -1, :], dim=-1, temperature=temperature)
         topk_gen = torch.topk(logits, n_beams, dim=-1)
-        new_scores = rearrange(
-            einsum(scores, topk_gen.values, "b, b k -> b k"), "b k -> (b k)"
-        )
+        new_scores = rearrange(scores[:, None] + topk_gen.values, "b k -> (b k)")
         topk_scores = torch.topk(new_scores, n_beams, dim=-1)
 
         topk_scores_indices = topk_scores.indices[:n_beams]
@@ -103,7 +101,7 @@ def generate_beam_search(
     best_sequence = x[best_score_idx, :].unsqueeze(0)
 
     if return_log_scores:
-        return SamplingResult(tokens=best_sequence, log_prob=best_score.log())
+        return SamplingResult(tokens=best_sequence, log_prob=best_score)
     return best_sequence
 
 
