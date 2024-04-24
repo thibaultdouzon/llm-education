@@ -69,25 +69,33 @@ def generate_beam_search(
     Implementation notes: generated sequences might diverge, must keep track of all of them
     assert batch_size is 1 for now.
     """
+    if x.size(0) > 1:
+        raise NotImplementedError("Batch size > 1 not implemented yet")
+
     scores = torch.zeros(1)
     for _ in range(n_tokens):
+        # Get n_beams × n_beams best scoring tokens
         logits = log_softmax_temp(model(x)[:, -1, :], dim=-1, temperature=temperature)
         topk_gen = torch.topk(logits, n_beams, dim=-1)
+
+        # Compute scores and select n_beams best scores
         new_scores = rearrange(scores[:, None] + topk_gen.values, "b k -> (b k)")
         topk_scores = torch.topk(new_scores, n_beams, dim=-1)
-
         topk_scores_indices = topk_scores.indices[:n_beams]
 
+        # Append selected tokens to previous sequences accordingly
         selected_tokens = rearrange(topk_gen.indices, "b k -> (b k)")[
             topk_scores_indices
         ]
         selected_sequences = topk_scores_indices // n_beams
         selected_tokens_scores = new_scores[topk_scores_indices]
 
-        scores = selected_tokens_scores
+        # First iteration only
         if x.size(0) == 1:
             x = x.repeat(n_beams, 1)
 
+        # For next iteration
+        scores = selected_tokens_scores
         x = torch.cat(
             [
                 x[selected_sequences],
