@@ -70,8 +70,7 @@ def generate_beam_search(
     assert batch_size is 1 for now.
     """
     scores = torch.ones(1)
-    for i in range(n_tokens):
-        logger.debug(f"Step {i}")
+    for _ in range(n_tokens):
         logits = model(x)[:, -1].softmax(dim=-1)  # TODO use log softmax and sums
         topk_gen = torch.topk(logits, n_beams, dim=-1)
         new_scores = rearrange(
@@ -87,14 +86,6 @@ def generate_beam_search(
         selected_sequences = topk_scores_indices // n_beams
         selected_tokens_scores = new_scores[topk_scores_indices]
 
-        logger.info(f"{topk_gen=}")
-        logger.info(f"{new_scores=}")
-        logger.info(f"{topk_scores=}")
-        logger.info(f"{topk_scores_indices=}")
-        logger.info(f"{selected_tokens=}")
-        logger.info(f"{selected_sequences=}")
-        logger.info(f"{selected_tokens_scores=}")
-
         scores = selected_tokens_scores
         if x.size(0) == 1:
             x = x.repeat(n_beams, 1)
@@ -106,7 +97,6 @@ def generate_beam_search(
             ],
             dim=1,
         )
-        logger.info(f"{x=}")
 
     best_score_idx = scores.argmax()
     best_score = scores[best_score_idx]

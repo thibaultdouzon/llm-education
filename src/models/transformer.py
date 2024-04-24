@@ -11,8 +11,10 @@ from typeguard import typechecked
 
 from src.utils.sampling import (
     GenerationStrategies,
+    eps,
     generate_beam_search,
     generate_greedy,
+    log_softmax_temp,
 )
 
 
@@ -219,6 +221,31 @@ class Transformer(nn.Module):
 
         x = self.norm_transformer(x)
         return self.lm_head(x)
+
+    @typechecked
+    def score_sequences(
+        self,
+        x: Int[torch.Tensor, "b l"],
+        temperature: float = 0.0,
+    ) -> Float[torch.Tensor, "b"]:
+        # TODO: Correctly deal with EOS token
+        seq_len = x.size(1)
+
+        with torch.inference_mode():
+            logits = self(x)  # b l d
+
+            logits_log_scores = log_softmax_temp(
+                logits, dim=-1, temperature=temperature
+            )
+
+        log_scores = torch.zeros(x.size(0))
+        batches_indices = torch.arange(0, x.size(0))
+        for i in range(seq_len - 1):
+            log_scores += logits_log_scores[
+                batches_indices, i, x[batches_indices, i + 1]
+            ]
+
+        return log_scores
 
     @typechecked
     def generate(
