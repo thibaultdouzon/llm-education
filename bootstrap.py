@@ -2,6 +2,7 @@ import random
 
 import torch
 import transformers as hgf
+from jaxtyping import Int
 
 from src.models import transformer
 from src.utils import sampling
@@ -31,3 +32,30 @@ def generate_rnd(model, **kwargs):
         strategy=strategy,
         return_log_scores=return_log_scores,
     )
+
+
+def score_generation(model, sequence: Int[torch.Tensor, "b l"], **kwargs):
+    if "seed" in kwargs:
+        torch.manual_seed(kwargs["seed"])
+
+    temperature = kwargs.get("temperature", 0.0)
+
+    assert sequence.size(0) == 1
+    seq_len = sequence.size(1)
+
+    with torch.inference_mode():
+        logits = model(sequence)  # b l d
+
+        if temperature < sampling.eps:
+            logits_log_scores = torch.log_softmax(logits, dim=-1)
+        else:
+            logits_log_scores = sampling.log_softmax_temp(
+                logits, temperature=temperature
+            )
+
+    log_scores = 0.0
+
+    for i in range(seq_len - 1):
+        log_scores += logits_log_scores[0, i, sequence[0, i + 1]]
+
+    return log_scores

@@ -6,13 +6,13 @@ Small lib implementing LLMs for educational purposes
 
 - [x] Implement Transformer architecture
 - [x] Load models from Huggingface and reproduce results
+- [ ] Generation with sampling, beam search
 - [ ] Tokenizers
 - [ ] Dataset (Shakespeare?)
 - [ ] Basic fine tuning
 - [ ] Better Transformer++ (from mamba)
 - [ ] KV cache for inference
 - [ ] Accelerate inference with smaller predictor
-- [ ] Generation with sampling, beam search
 - [ ] Generation guided by grammar
 - [ ] SSM / Mamba architecture
 - [ ] Visual Transformers

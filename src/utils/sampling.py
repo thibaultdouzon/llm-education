@@ -108,7 +108,13 @@ def generate_beam_search(
         )
         logger.info(f"{x=}")
 
-    return torch.randint(0, model.config.d_vocab, (x.size(0), 3))
+    best_score_idx = scores.argmax()
+    best_score = scores[best_score_idx]
+    best_sequence = x[best_score_idx, :].unsqueeze(0)
+
+    if return_log_scores:
+        return SamplingResult(tokens=best_sequence, log_prob=best_score.log())
+    return best_sequence
 
 
 @typechecked
@@ -125,7 +131,7 @@ def generate_greedy(
 ):
     if x.size(0) > 1:
         raise NotImplementedError("Batch size > 1 not implemented yet")
-    log_prob = 1.0
+    log_prob = 0.0
     for i in range(n_tokens):
         logits = self(x)[:, -1]
         if temperature < eps:
