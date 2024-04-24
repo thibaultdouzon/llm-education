@@ -1,3 +1,4 @@
+from collections import namedtuple
 from enum import Enum
 
 import torch
@@ -14,6 +15,8 @@ class GenerationStrategies(Enum):
 
 
 eps = 1e-6
+
+SamplingResult = namedtuple("SamplingResult", ["tokens", "log_prob"])
 
 
 def softmax_temp(
@@ -120,18 +123,23 @@ def generate_greedy(
     Int[torch.Tensor, "b ll"]
     | tuple[Int[torch.Tensor, "b ll"], Float[torch.Tensor, "b"]]
 ):
+    if x.size(0) > 1:
+        raise NotImplementedError("Batch size > 1 not implemented yet")
     log_prob = 1.0
     for i in range(n_tokens):
         logits = self(x)[:, -1]
         if temperature < eps:
             log_prob_logits = logits.log_softmax(dim=-1)
             pred = torch.argmax(log_prob_logits)
-            log_prob += log_prob_logits[pred]
+            log_prob += log_prob_logits[:, pred]
         else:
-            sampling_weights = softmax_temp(logits, dim=-1, temperature=temperature)
-            pred = torch.multinomial(sampling_weights, num_samples=1)
+            log_prob_logits = log_softmax_temp(logits, dim=-1, temperature=temperature)
+            pred = torch.multinomial(log_prob_logits.exp(), num_samples=1).squeeze()
+            log_prob += log_prob_logits[:, pred]
 
-        x = torch.cat([x, pred.unsqueeze(-1)], dim=1)
+        x = torch.cat([x, pred.view((1, 1))], dim=1)
         # TODO: EOS token ?
 
+    if return_log_scores:
+        return SamplingResult(tokens=x, log_prob=log_prob)
     return x

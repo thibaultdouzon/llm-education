@@ -234,37 +234,38 @@ class Transformer(nn.Module):
         Int[torch.Tensor, "b ll"]
         | tuple[Int[torch.Tensor, "b ll"], Float[torch.Tensor, "b"]]
     ):
-        match strategy:
-            case GenerationStrategies.DETERMINIST:
-                assert (
-                    temperature == 0.0
-                ), f"{strategy = } and {temperature = } are incompatible, temperature must be 0.0"
-                return generate_greedy(
-                    self,
-                    x,
-                    n_tokens,
-                    temperature=0.0,
-                    return_log_scores=return_log_scores,
-                )
-            case GenerationStrategies.SAMPLING:
-                return generate_greedy(
-                    self,
-                    x,
-                    n_tokens,
-                    temperature=temperature,
-                    return_log_scores=return_log_scores,
-                )
-            case GenerationStrategies.BEAM_SEARCH:
-                return generate_beam_search(
-                    self,
-                    x,
-                    n_tokens,
-                    n_beams,
-                    temperature=temperature,
-                    return_log_scores=return_log_scores,
-                )
-            case _:
-                raise NotImplementedError()
+        with torch.inference_mode():
+            match strategy:
+                case GenerationStrategies.DETERMINIST:
+                    assert (
+                        temperature == 0.0
+                    ), f"{strategy = } and {temperature = } are incompatible, temperature must be 0.0"
+                    return generate_greedy(
+                        self,
+                        x,
+                        n_tokens,
+                        temperature=0.0,
+                        return_log_scores=return_log_scores,
+                    )
+                case GenerationStrategies.SAMPLING:
+                    return generate_greedy(
+                        self,
+                        x,
+                        n_tokens,
+                        temperature=temperature,
+                        return_log_scores=return_log_scores,
+                    )
+                case GenerationStrategies.BEAM_SEARCH:
+                    return generate_beam_search(
+                        self,
+                        x,
+                        n_tokens,
+                        n_beams,
+                        temperature=temperature,
+                        return_log_scores=return_log_scores,
+                    )
+                case _:
+                    raise NotImplementedError()
 
     @classmethod
     def from_pretrained(
