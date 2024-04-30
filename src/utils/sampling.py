@@ -105,7 +105,7 @@ def generate_beam_search(
         )
 
     best_score_idx = scores.argmax()
-    best_score = scores[best_score_idx]
+    best_score = scores[best_score_idx].unsqueeze(0)
     best_sequence = x[best_score_idx, :].unsqueeze(0)
 
     if return_log_scores:
