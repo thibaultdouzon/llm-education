@@ -1,21 +1,17 @@
 from dataclasses import dataclass
 from functools import partial
 
+import equinox as eqx
+import jax
+import jax.numpy as jnp
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from beartype import beartype
 from einops import einsum, rearrange
-from jaxtyping import Float, Int
+from jaxtyping import Array, Float, Int, jaxtyped
 from transformers import AutoConfig, AutoModelForCausalLM, activations
-from typeguard import typechecked
 
-from src.utils.sampling import (
-    GenerationStrategies,
-    eps,
-    generate_beam_search,
-    generate_greedy,
-    log_softmax_temp,
-)
+from src.utils.sampling import GenerationStrategies, generate_beam_search, generate_greedy, log_softmax_temp
 
 
 @dataclass
@@ -30,37 +26,36 @@ class Config:
     dropout: float
 
     def __post_init__(self):
-        assert (
-            self.d_model % self.n_heads == 0
-        ), f"{self.d_model =} must be divisible by {self.n_heads = }"
+        assert self.d_model % self.n_heads == 0, f"{self.d_model =} must be divisible by {self.n_heads = }"
 
 
-class SinCosPositionalEncoding(nn.Module):
+class SinCosPositionalEncoding(eqx.Module):
+    config: Config
+    pe: Array
+
     def __init__(self, config: Config):
-        super().__init__()
         self.config = config
 
-        self.pe = nn.Parameter(
-            torch.zeros(1, config.max_size, config.d_model),
-            requires_grad=False,
+        self.pe = jnp.zeros(
+            (1, config.max_size, config.d_model),
         )
+        self.init_weights()
 
     def init_weights(self):
-        pos = torch.arange(self.config.max_size, dtype=self.pe.dtype)
-        pos = pos.unsqueeze(-1) / (
-            10000 ** (torch.arange(0, self.config.d_model, 2) / self.config.d_model)
-        )
-        self.pe.data = rearrange(
-            [torch.sin(pos), torch.cos(pos)],
+        pos = jnp.arange(0, self.config.max_size, dtype=self.pe.dtype)[:, None]
+        pos = pos * jnp.exp(jnp.arange(0, self.config.d_model, 2) * (-jnp.log(10000.0) / self.config.d_model))
+        self.pe = rearrange(
+            [jnp.sin(pos), jnp.cos(pos)],
             "a l d2 -> 1 l (d2 a)",
             a=2,
             l=self.config.max_size,
             d2=self.config.d_model // 2,
         )
 
-    @typechecked
-    def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
-        x = x + self.pe[:, : x.size(1)]
+    @jax.jit
+    @jaxtyped(typechecker=beartype)
+    def __call__(self, x: Float[Array, "b l d"]) -> Float[Array, "b l d"]:
+        x = x + self.pe[:, : x.shape[1]]
         return x
 
 
@@ -71,7 +66,7 @@ class DotProductAttention(nn.Module):
 
         self.attn_dropout = nn.Dropout(config.dropout)
 
-    @typechecked
+    @jaxtyped(typechecker=beartype)
     def forward(
         self,
         q: Float[torch.Tensor, "b l2 h e"],
@@ -84,9 +79,7 @@ class DotProductAttention(nn.Module):
 
         attn_bias = torch.zeros(1, 1, len_q, len_k, dtype=q.dtype, device=q.device)
         if self.config.is_causal:
-            attn_bias_msk = torch.ones(
-                1, 1, len_q, len_k, dtype=torch.bool, device=q.device
-            ).tril(diagonal=0)
+            attn_bias_msk = torch.ones(1, 1, len_q, len_k, dtype=torch.bool, device=q.device).tril(diagonal=0)
             attn_bias.masked_fill_(attn_bias_msk.logical_not(), float("-inf"))
             attn_bias.to(q.dtype)
 
@@ -97,20 +90,16 @@ class DotProductAttention(nn.Module):
         return attn
 
 
-@typechecked
-def split_heads(
-    x: Float[torch.Tensor, "b l d"], n_heads: int
-) -> Float[torch.Tensor, "b l h e"]:
+@jaxtyped(typechecker=beartype)
+def split_heads(x: Float[torch.Tensor, "b l d"], n_heads: int) -> Float[torch.Tensor, "b l h e"]:
     b, l, d = x.size()
     assert d % n_heads == 0, f"{d = } must be divisible by {n_heads = }"
     head_dim = d // n_heads
     return rearrange(x, "b l (h e) -> b l h e", h=n_heads, e=head_dim)
 
 
-@typechecked
-def merge_heads(
-    x: Float[torch.Tensor, "b l h e"], n_heads: int
-) -> Float[torch.Tensor, "b l d"]:
+@jaxtyped(typechecker=beartype)
+def merge_heads(x: Float[torch.Tensor, "b l h e"], n_heads: int) -> Float[torch.Tensor, "b l d"]:
     b, l, h, d = x.size()
     assert h == n_heads, f"{h =} must be equal to {n_heads =}"
     return rearrange(x, "b l h e -> b l (h e)")
@@ -134,7 +123,7 @@ class SelfAttention(nn.Module):
         self.out_proj = nn.Linear(config.d_model, config.d_model)
         self.out_dropout = nn.Dropout(config.dropout)
 
-    @typechecked
+    @jaxtyped(typechecker=beartype)
     def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
         q, k, v = self.qkv_proj(x).chunk(3, dim=-1)
         q_h, k_h, v_h = map(
@@ -158,7 +147,7 @@ class FeedForward(nn.Module):
         self.ff_m_proj = nn.Linear(config.d_ff, config.d_model)
         self.ff_dropout = nn.Dropout(config.dropout)
 
-    @typechecked
+    @jaxtyped(typechecker=beartype)
     def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
         x = self.m_ff_proj(x)
         x = self.act(x)
@@ -175,7 +164,7 @@ class Block(nn.Module):
         self.ffn = FeedForward(config)
         self.norm_ffn = nn.LayerNorm(config.d_model)
 
-    @typechecked
+    @jaxtyped(typechecker=beartype)
     def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
         x = self.attn(self.norm_attn(x)) + x
 
@@ -211,7 +200,7 @@ class Transformer(nn.Module):
             torch.nn.init.zeros_(module.bias)
             torch.nn.init.ones_(module.weight)
 
-    @typechecked
+    @jaxtyped(typechecker=beartype)
     def forward(self, x: Int[torch.Tensor, "b l"]) -> Float[torch.Tensor, "b l d"]:
         x = self.embedding(x) + self.positional_encoding(
             torch.arange(x.size(1), device=x.device, dtype=torch.int64).unsqueeze(0)
@@ -222,7 +211,7 @@ class Transformer(nn.Module):
         x = self.norm_transformer(x)
         return self.lm_head(x)
 
-    @typechecked
+    @jaxtyped(typechecker=beartype)
     def score_sequences(
         self,
         x: Int[torch.Tensor, "b l"],
@@ -234,20 +223,16 @@ class Transformer(nn.Module):
         with torch.inference_mode():
             logits = self(x)  # b l d
 
-            logits_log_scores = log_softmax_temp(
-                logits, dim=-1, temperature=temperature
-            )
+            logits_log_scores = log_softmax_temp(logits, dim=-1, temperature=temperature)
 
         log_scores = torch.zeros(x.size(0))
         batches_indices = torch.arange(0, x.size(0))
         for i in range(seq_len - 1):
-            log_scores += logits_log_scores[
-                batches_indices, i, x[batches_indices, i + 1]
-            ]
+            log_scores += logits_log_scores[batches_indices, i, x[batches_indices, i + 1]]
 
         return log_scores
 
-    @typechecked
+    @jaxtyped(typechecker=beartype)
     def generate(
         self,
         x: Int[torch.Tensor, "b l"],
@@ -257,10 +242,7 @@ class Transformer(nn.Module):
         temperature: float = 0.0,
         *,
         return_log_scores: bool = False,
-    ) -> (
-        Int[torch.Tensor, "b ll"]
-        | tuple[Int[torch.Tensor, "b ll"], Float[torch.Tensor, "b"]]
-    ):
+    ) -> Int[torch.Tensor, "b ll"] | tuple[Int[torch.Tensor, "b ll"], Float[torch.Tensor, "b"]]:
         with torch.inference_mode():
             match strategy:
                 case GenerationStrategies.DETERMINIST:
