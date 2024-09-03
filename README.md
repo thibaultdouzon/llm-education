@@ -7,6 +7,7 @@ Small lib implementing LLMs for educational purposes
 - [x] Implement Transformer architecture
 - [x] Load models from Huggingface and reproduce results
 - [x] Generation with sampling, beam search
+- [ ] Transition to jax / equinox
 - [ ] Tokenizers
 - [ ] Dataset (Shakespeare?)
 - [ ] Basic fine tuning

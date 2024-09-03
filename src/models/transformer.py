@@ -2,10 +2,9 @@ from dataclasses import dataclass
 from functools import partial
 
 import equinox as eqx
+import equinox.nn as nn
 import jax
 import jax.numpy as jnp
-import torch
-import torch.nn as nn
 from beartype import beartype
 from einops import einsum, rearrange
 from jaxtyping import Array, Float, Int, jaxtyped
@@ -46,44 +45,47 @@ class SinCosPositionalEncoding(eqx.Module):
         pos = pos * jnp.exp(jnp.arange(0, self.config.d_model, 2) * (-jnp.log(10000.0) / self.config.d_model))
         self.pe = rearrange(
             [jnp.sin(pos), jnp.cos(pos)],
-            "a l d2 -> 1 l (d2 a)",
-            a=2,
+            "d2 l d -> 1 l (d d2)",
+            d=self.config.d_model // 2,
+            d2=2,
             l=self.config.max_size,
-            d2=self.config.d_model // 2,
         )
 
     @jax.jit
     @jaxtyped(typechecker=beartype)
-    def __call__(self, x: Float[Array, "b l d"]) -> Float[Array, "b l d"]:
+    def __call__(self, x: Float[Array, "batch length d_model"]) -> Float[Array, "batch length d_model"]:
         x = x + self.pe[:, : x.shape[1]]
         return x
 
 
-class DotProductAttention(nn.Module):
+class DotProductAttention(eqx.Module):
+    config: Config
+    attn_dropout: nn.Dropout
+
     def __init__(self, config: Config):
         super().__init__()
         self.config = config
 
         self.attn_dropout = nn.Dropout(config.dropout)
 
+    @jax.jit
     @jaxtyped(typechecker=beartype)
-    def forward(
+    def __call__(
         self,
-        q: Float[torch.Tensor, "b l2 h e"],
-        k: Float[torch.Tensor, "b l1 h e"],
-        v: Float[torch.Tensor, "b l1 h e"],
-    ) -> Float[torch.Tensor, "b l2 h e"]:
-        d_model, len_q, len_k = q.size(-1), q.size(-3), k.size(-3)
+        q: Float[Array, "batch length_q n_heads d_model_split"],
+        k: Float[Array, "batch lenght_kv n_heads d_model_split"],
+        v: Float[Array, "batch length_kv n_heads d_model_split"],
+    ) -> Float[Array, "batch length_q n_heads d_model_split"]:
+        d_model, len_q, len_k = q.shape[3], q.shape[1], k.shape[1]
         scale = 1.0 / (d_model**0.5)
         attn_weights = einsum(q, k, "b l2 h e, b l1 h e -> b h l2 l1") * scale
 
-        attn_bias = torch.zeros(1, 1, len_q, len_k, dtype=q.dtype, device=q.device)
+        attn_bias = jnp.zeros((1, 1, len_q, len_k), dtype=q.dtype, device=q.device)
         if self.config.is_causal:
-            attn_bias_msk = torch.ones(1, 1, len_q, len_k, dtype=torch.bool, device=q.device).tril(diagonal=0)
-            attn_bias.masked_fill_(attn_bias_msk.logical_not(), float("-inf"))
-            attn_bias.to(q.dtype)
+            attn_bias_msk = jnp.tril(jnp.ones((1, 1, len_q, len_k), dtype=jnp.bool, device=q.device))
+            attn_bias = attn_bias + jnp.logical_not(attn_bias_msk) * float("-inf")
 
-        attn_weights += attn_bias
+        attn_weights = attn_weights + attn_bias
         attn_weights = attn_weights.softmax(dim=-1)
         attn_weights = self.attn_dropout(attn_weights)
         attn = einsum(attn_weights, v, "b h l2 l1, b l1 h e -> b l2 h e")
@@ -91,8 +93,10 @@ class DotProductAttention(nn.Module):
 
 
 @jaxtyped(typechecker=beartype)
-def split_heads(x: Float[torch.Tensor, "b l d"], n_heads: int) -> Float[torch.Tensor, "b l h e"]:
-    b, l, d = x.size()
+def split_heads(
+    x: Float[Array, "batch length d_model"], n_heads: int
+) -> Float[Array, "batch length n_heads d_model_split"]:
+    b, l, d = x.shape
     assert d % n_heads == 0, f"{d = } must be divisible by {n_heads = }"
     head_dim = d // n_heads
     return rearrange(x, "b l (h e) -> b l h e", h=n_heads, e=head_dim)
@@ -214,9 +218,9 @@ class Transformer(nn.Module):
     @jaxtyped(typechecker=beartype)
     def score_sequences(
         self,
-        x: Int[torch.Tensor, "b l"],
+        x: Int[torch.Tensor, "batch l"],
         temperature: float = 0.0,
-    ) -> Float[torch.Tensor, "b"]:
+    ) -> Float[torch.Tensor, "batch"]:
         # TODO: Correctly deal with EOS token
         seq_len = x.size(1)
 
@@ -235,14 +239,14 @@ class Transformer(nn.Module):
     @jaxtyped(typechecker=beartype)
     def generate(
         self,
-        x: Int[torch.Tensor, "b l"],
+        x: Int[torch.Tensor, "batch l"],
         n_tokens: int = 100,
         n_beams: int = 1,
         strategy: GenerationStrategies = GenerationStrategies.DETERMINIST,
         temperature: float = 0.0,
         *,
         return_log_scores: bool = False,
-    ) -> Int[torch.Tensor, "b ll"] | tuple[Int[torch.Tensor, "b ll"], Float[torch.Tensor, "b"]]:
+    ) -> Int[torch.Tensor, "batch ll"] | tuple[Int[torch.Tensor, "batch ll"], Float[torch.Tensor, "batch"]]:
         with torch.inference_mode():
             match strategy:
                 case GenerationStrategies.DETERMINIST:
