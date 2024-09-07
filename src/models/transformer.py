@@ -14,7 +14,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, activations
 from src.utils.sampling import GenerationStrategies, generate_beam_search, generate_greedy, log_softmax_temp
 
 
-@dataclass
+@dataclass(frozen=True)
 class Config:
     d_model: int
     d_vocab: int
@@ -30,7 +30,7 @@ class Config:
 
 
 class SinCosPositionalEncoding(eqx.Module):
-    config: Config = eqx.field(static=True)
+    config: Config
     pe: Array
 
     def __init__(self, config: Config):
@@ -54,7 +54,7 @@ class SinCosPositionalEncoding(eqx.Module):
             l=self.config.max_size,
         )
 
-    @jax.jit
+    @eqx.filter_jit
     @jaxtyped(typechecker=beartype)
     def __call__(self, x: Float[Array, "batch length d_model"]) -> Float[Array, "batch length d_model"]:
         x = x + self.pe[:, : x.shape[1], :]
