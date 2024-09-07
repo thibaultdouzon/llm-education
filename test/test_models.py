@@ -62,6 +62,22 @@ class TestDotProductAttention:
         assert layer_out.shape == (2, 64, config.d_model)
 
 
+class TestSelfAttention:
+    def test_shape_out(self):
+        config = transformer.Config(
+            d_model=768, d_vocab=50257, max_size=1024, d_ff=3072, n_heads=12, n_layers=12, is_causal=True, dropout=0.1
+        )
+        key = jax.random.PRNGKey(0)
+        k_attn, k_in, k_call = jax.random.split(key, 3)
+
+        self_attention = transformer.SelfAttention(config, key=k_attn)
+
+        layer_in = jax.random.normal(k_in, (2, 64, config.d_model))
+        layer_out = self_attention(layer_in, key=k_call)
+
+        assert layer_out.shape == (2, 64, config.d_model)
+
+
 class TestGPT2:
     def test_shape_out(self, gpt2_model):
         vocab_size = gpt2_model.config.d_vocab

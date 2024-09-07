@@ -8,6 +8,9 @@ Small lib implementing LLMs for educational purposes
 - [x] Load models from Huggingface and reproduce results
 - [x] Generation with sampling, beam search
 - [ ] Transition to jax / equinox
+    - fix all layers, implement basic tests
+    - Remove batch and replace with vmap (same with length)
+    
 - [ ] Tokenizers
 - [ ] Dataset (Shakespeare?)
 - [ ] Basic fine tuning

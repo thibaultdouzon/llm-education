@@ -118,7 +118,13 @@ def merge_heads(
 
 
 class SelfAttention(eqx.Module):
-    def __init__(self, config: Config):
+    config: Config
+    qkv_proj: nn.Linear
+    attention: DotProductAttention
+    out_proj: nn.Linear
+    out_dropout: nn.Dropout
+
+    def __init__(self, config: Config, key: PRNGKeyArray):
         super().__init__()
 
         self.config = config
@@ -128,25 +134,33 @@ class SelfAttention(eqx.Module):
             head_dim * config.n_heads == config.d_model
         ), f"{config.d_model =} must be divisible by {config.n_heads =}"
 
-        self.qkv_proj = nn.Linear(config.d_model, 3 * config.d_model)
+        key, key_qkv, key_out = jax.random.split(key, 3)
+
+        self.qkv_proj = nn.Linear(config.d_model, 3 * config.d_model, key=key_qkv)
 
         self.attention = DotProductAttention(config)
 
-        self.out_proj = nn.Linear(config.d_model, config.d_model)
+        self.out_proj = nn.Linear(config.d_model, config.d_model, key=key_out)
         self.out_dropout = nn.Dropout(config.dropout)
 
+    @eqx.filter_jit
     @jaxtyped(typechecker=beartype)
-    def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
-        q, k, v = self.qkv_proj(x).chunk(3, dim=-1)
+    def __call__(
+        self, x: Float[Array, "batch length d_model"], key: PRNGKeyArray
+    ) -> Float[Array, "batch length d_model"]:
+        key_attn, key_drop = jax.random.split(key)
+
+        x = self.qkv_proj(x)
+        q, k, v = jnp.split(x, 3, axis=-1)
         q_h, k_h, v_h = map(
             partial(split_heads, n_heads=self.config.n_heads),
             (q, k, v),
         )
 
-        out_h = self.attention(q_h, k_h, v_h)
+        out_h = self.attention(q_h, k_h, v_h, key=key_attn)
         out = merge_heads(out_h, self.config.n_heads)
         out = self.out_proj(out)
-        return self.out_dropout(out)
+        return self.out_dropout(out, key=key_drop)
 
 
 class FeedForward(eqx.Module):
@@ -160,7 +174,7 @@ class FeedForward(eqx.Module):
         self.ff_dropout = nn.Dropout(config.dropout)
 
     @jaxtyped(typechecker=beartype)
-    def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
+    def forward(self, x: Float[Array, "b l d"]) -> Float[Array, "b l d"]:
         x = self.m_ff_proj(x)
         x = self.act(x)
         x = self.ff_m_proj(x)
@@ -177,7 +191,7 @@ class Block(eqx.Module):
         self.norm_ffn = nn.LayerNorm(config.d_model)
 
     @jaxtyped(typechecker=beartype)
-    def forward(self, x: Float[torch.Tensor, "b l d"]) -> Float[torch.Tensor, "b l d"]:
+    def forward(self, x: Float[Array, "b l d"]) -> Float[Array, "b l d"]:
         x = self.attn(self.norm_attn(x)) + x
 
         x = self.ffn(self.norm_ffn(x)) + x
@@ -213,7 +227,7 @@ class Transformer(eqx.Module):
             torch.nn.init.ones_(module.weight)
 
     @jaxtyped(typechecker=beartype)
-    def forward(self, x: Int[torch.Tensor, "b l"]) -> Float[torch.Tensor, "b l d"]:
+    def forward(self, x: Int[Array, "b l"]) -> Float[Array, "b l d"]:
         x = self.embedding(x) + self.positional_encoding(
             torch.arange(x.size(1), device=x.device, dtype=torch.int64).unsqueeze(0)
         )
@@ -226,9 +240,9 @@ class Transformer(eqx.Module):
     @jaxtyped(typechecker=beartype)
     def score_sequences(
         self,
-        x: Int[torch.Tensor, "batch l"],
+        x: Int[Array, "batch l"],
         temperature: float = 0.0,
-    ) -> Float[torch.Tensor, "batch"]:
+    ) -> Float[Array, "batch"]:
         # TODO: Correctly deal with EOS token
         seq_len = x.size(1)
 
@@ -247,14 +261,14 @@ class Transformer(eqx.Module):
     @jaxtyped(typechecker=beartype)
     def generate(
         self,
-        x: Int[torch.Tensor, "batch l"],
+        x: Int[Array, "batch l"],
         n_tokens: int = 100,
         n_beams: int = 1,
         strategy: GenerationStrategies = GenerationStrategies.DETERMINIST,
         temperature: float = 0.0,
         *,
         return_log_scores: bool = False,
-    ) -> Int[torch.Tensor, "batch ll"] | tuple[Int[torch.Tensor, "batch ll"], Float[torch.Tensor, "batch"]]:
+    ) -> Int[Array, "batch ll"] | tuple[Int[Array, "batch ll"], Float[Array, "batch"]]:
         with torch.inference_mode():
             match strategy:
                 case GenerationStrategies.DETERMINIST:
