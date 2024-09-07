@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import torch
 from beartype import beartype
 from einops import einsum, rearrange
-from jaxtyping import Array, Float, Int, jaxtyped
+from jaxtyping import Array, Float, Int, PRNGKeyArray, jaxtyped
 from transformers import AutoConfig, AutoModelForCausalLM, activations
 
 from src.utils.sampling import GenerationStrategies, generate_beam_search, generate_greedy, log_softmax_temp
@@ -62,7 +62,7 @@ class SinCosPositionalEncoding(eqx.Module):
 
 
 class DotProductAttention(eqx.Module):
-    config: Config = eqx.field(static=True)
+    config: Config
     attn_dropout: nn.Dropout
 
     def __init__(self, config: Config):
@@ -71,30 +71,32 @@ class DotProductAttention(eqx.Module):
 
         self.attn_dropout = nn.Dropout(config.dropout)
 
-    @jax.jit
+    @eqx.filter_jit
     @jaxtyped(typechecker=beartype)
     def __call__(
         self,
         q: Float[Array, "batch length_q n_heads d_model_split"],
         k: Float[Array, "batch lenght_kv n_heads d_model_split"],
         v: Float[Array, "batch length_kv n_heads d_model_split"],
+        key: PRNGKeyArray,
     ) -> Float[Array, "batch length_q n_heads d_model_split"]:
         d_model, len_q, len_k = q.shape[3], q.shape[1], k.shape[1]
         scale = 1.0 / (d_model**0.5)
         attn_weights = einsum(q, k, "b l2 h e, b l1 h e -> b h l2 l1") * scale
 
-        attn_bias = jnp.zeros((1, 1, len_q, len_k), dtype=q.dtype, device=q.device)
+        attn_bias = jnp.zeros((1, 1, len_q, len_k), dtype=q.dtype)
         if self.config.is_causal:
-            attn_bias_msk = jnp.tril(jnp.ones((1, 1, len_q, len_k), dtype=jnp.bool, device=q.device))
+            attn_bias_msk = jnp.tril(jnp.ones((1, 1, len_q, len_k), dtype=jnp.bool))
             attn_bias = attn_bias + jnp.logical_not(attn_bias_msk) * float("-inf")
 
         attn_weights = attn_weights + attn_bias
-        attn_weights = attn_weights.softmax(dim=-1)
-        attn_weights = self.attn_dropout(attn_weights)
+        attn_weights = jax.nn.softmax(attn_weights, axis=-1)
+        attn_weights = self.attn_dropout(attn_weights, key=key)
         attn = einsum(attn_weights, v, "b h l2 l1, b l1 h e -> b l2 h e")
         return attn
 
 
+@eqx.filter_jit
 @jaxtyped(typechecker=beartype)
 def split_heads(
     x: Float[Array, "batch length d_model"], n_heads: int
@@ -105,9 +107,12 @@ def split_heads(
     return rearrange(x, "b l (h e) -> b l h e", h=n_heads, e=head_dim)
 
 
+@eqx.filter_jit
 @jaxtyped(typechecker=beartype)
-def merge_heads(x: Float[torch.Tensor, "b l h e"], n_heads: int) -> Float[torch.Tensor, "b l d"]:
-    b, l, h, d = x.size()
+def merge_heads(
+    x: Float[Array, "batch length n_heads d_model_split"], n_heads: int
+) -> Float[Array, "batch length d_model"]:
+    b, l, h, d = x.shape
     assert h == n_heads, f"{h =} must be equal to {n_heads =}"
     return rearrange(x, "b l h e -> b l (h e)")
 

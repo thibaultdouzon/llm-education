@@ -1,3 +1,5 @@
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 import pytest
@@ -31,9 +33,33 @@ class TestSinCosPositionalEncoding:
         pe = transformer.SinCosPositionalEncoding(config)
 
         key = jax.random.PRNGKey(0)
-        dummy_in = jax.random.normal(key, shape=(2, 64, config.d_model), dtype=jnp.float32)
-        pe_out = pe(dummy_in)
-        assert pe_out.shape == (2, 64, config.d_model)
+        layer_in = jax.random.normal(key, shape=(2, 64, config.d_model), dtype=jnp.float32)
+        layer_out = pe(layer_in)
+        assert layer_out.shape == (2, 64, config.d_model)
+
+
+class TestDotProductAttention:
+    def test_shape_out(self):
+        config = transformer.Config(
+            d_model=768, d_vocab=50257, max_size=1024, d_ff=3072, n_heads=12, n_layers=12, is_causal=True, dropout=0.1
+        )
+        attention = transformer.DotProductAttention(config)
+
+        key = jax.random.PRNGKey(0)
+        key, k_q, k_k, k_v = jax.random.split(key, 4)
+        layer_in_q = jax.random.normal(k_q, shape=(2, 64, config.d_model), dtype=jnp.float32)
+        layer_in_k = jax.random.normal(k_k, shape=(2, 64, config.d_model), dtype=jnp.float32)
+        layer_in_v = jax.random.normal(k_v, shape=(2, 64, config.d_model), dtype=jnp.float32)
+
+        key, k_call = jax.random.split(key)
+
+        fn_split_head = partial(transformer.split_heads, n_heads=config.n_heads)
+
+        layer_out = attention(*map(fn_split_head, (layer_in_q, layer_in_k, layer_in_v)), key=k_call)
+
+        layer_out = transformer.merge_heads(layer_out, config.n_heads)
+
+        assert layer_out.shape == (2, 64, config.d_model)
 
 
 class TestGPT2:
