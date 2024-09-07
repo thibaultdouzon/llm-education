@@ -5,6 +5,7 @@ import equinox as eqx
 import equinox.nn as nn
 import jax
 import jax.numpy as jnp
+import torch
 from beartype import beartype
 from einops import einsum, rearrange
 from jaxtyping import Array, Float, Int, jaxtyped
@@ -29,7 +30,7 @@ class Config:
 
 
 class SinCosPositionalEncoding(eqx.Module):
-    config: Config
+    config: Config = eqx.field(static=True)
     pe: Array
 
     def __init__(self, config: Config):
@@ -37,8 +38,10 @@ class SinCosPositionalEncoding(eqx.Module):
 
         self.pe = jnp.zeros(
             (1, config.max_size, config.d_model),
+            dtype=jnp.float32,
         )
         self.init_weights()
+        print(self.pe.shape)
 
     def init_weights(self):
         pos = jnp.arange(0, self.config.max_size, dtype=self.pe.dtype)[:, None]
@@ -54,12 +57,12 @@ class SinCosPositionalEncoding(eqx.Module):
     @jax.jit
     @jaxtyped(typechecker=beartype)
     def __call__(self, x: Float[Array, "batch length d_model"]) -> Float[Array, "batch length d_model"]:
-        x = x + self.pe[:, : x.shape[1]]
+        x = x + self.pe[:, : x.shape[1], :]
         return x
 
 
 class DotProductAttention(eqx.Module):
-    config: Config
+    config: Config = eqx.field(static=True)
     attn_dropout: nn.Dropout
 
     def __init__(self, config: Config):
@@ -109,7 +112,7 @@ def merge_heads(x: Float[torch.Tensor, "b l h e"], n_heads: int) -> Float[torch.
     return rearrange(x, "b l h e -> b l (h e)")
 
 
-class SelfAttention(nn.Module):
+class SelfAttention(eqx.Module):
     def __init__(self, config: Config):
         super().__init__()
 
@@ -141,7 +144,7 @@ class SelfAttention(nn.Module):
         return self.out_dropout(out)
 
 
-class FeedForward(nn.Module):
+class FeedForward(eqx.Module):
     def __init__(self, config: Config):
         super().__init__()
         self.config = config
@@ -159,7 +162,7 @@ class FeedForward(nn.Module):
         return self.ff_dropout(x)
 
 
-class Block(nn.Module):
+class Block(eqx.Module):
     def __init__(self, config: Config):
         super().__init__()
         self.config = config
@@ -176,7 +179,7 @@ class Block(nn.Module):
         return x
 
 
-class Transformer(nn.Module):
+class Transformer(eqx.Module):
     def __init__(
         self,
         config: Config,
@@ -193,7 +196,7 @@ class Transformer(nn.Module):
 
         self.apply(self._init_weights)
 
-    def _init_weights(self, module: nn.Module):
+    def _init_weights(self, module: eqx.Module):
         if isinstance(module, nn.Linear):
             torch.nn.init.xavier_normal_(module.weight)
             if module.bias is not None:

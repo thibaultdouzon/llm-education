@@ -2,7 +2,7 @@ from collections import namedtuple
 from enum import Enum
 
 import torch
-from einops import einsum, rearrange
+from einops import rearrange
 from jaxtyping import Float, Int
 from loguru import logger
 from typeguard import typechecked
@@ -60,10 +60,7 @@ def generate_beam_search(
     temperature: float = 0.0,
     *,
     return_log_scores: bool = False,
-) -> (
-    Int[torch.Tensor, "b ll"]
-    | tuple[Int[torch.Tensor, "b ll"], Float[torch.Tensor, "b"]]
-):
+) -> Int[torch.Tensor, "b ll"] | tuple[Int[torch.Tensor, "b ll"], Float[torch.Tensor, "b"]]:
     """
     Beam search algorithm.
     Implementation notes: generated sequences might diverge, must keep track of all of them
@@ -84,9 +81,7 @@ def generate_beam_search(
         topk_scores_indices = topk_scores.indices[:n_beams]
 
         # Append selected tokens to previous sequences accordingly
-        selected_tokens = rearrange(topk_gen.indices, "b k -> (b k)")[
-            topk_scores_indices
-        ]
+        selected_tokens = rearrange(topk_gen.indices, "b k -> (b k)")[topk_scores_indices]
         selected_sequences = topk_scores_indices // n_beams
         selected_tokens_scores = new_scores[topk_scores_indices]
 
@@ -121,10 +116,7 @@ def generate_greedy(
     temperature: float = 0.0,
     *,
     return_log_scores: bool = False,
-) -> (
-    Int[torch.Tensor, "b ll"]
-    | tuple[Int[torch.Tensor, "b ll"], Float[torch.Tensor, "b"]]
-):
+) -> Int[torch.Tensor, "b ll"] | tuple[Int[torch.Tensor, "b ll"], Float[torch.Tensor, "b"]]:
     if x.size(0) > 1:
         raise NotImplementedError("Batch size > 1 not implemented yet")
     log_prob = 0.0

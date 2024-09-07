@@ -3,7 +3,7 @@ import pytest
 import torch
 from jaxtyping import Float, Int
 
-import bootstrap
+# import bootstrap
 from src.models import transformer
 from src.utils import sampling
 
@@ -90,12 +90,7 @@ class TestGeneration:
             return_log_scores=True,
         )
 
-        assert (
-            y_det.tokens.size()
-            == y_greedy.tokens.size()
-            == y_beam.tokens.size()
-            == (1, 11)
-        )
+        assert y_det.tokens.size() == y_greedy.tokens.size() == y_beam.tokens.size() == (1, 11)
 
         det_score = gpt2_model.score_sequences(y_det.tokens)
         greedy_score = gpt2_model.score_sequences(y_greedy.tokens)
